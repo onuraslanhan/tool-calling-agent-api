@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.tools import tool
@@ -17,7 +17,7 @@ load_dotenv(dotenv_path=env_path)
 
 app = FastAPI(title="Agent API")
 
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+embeddings = GoogleGenerativeAIEmbeddings(model="embedding-001", max_retries=3)
 llm = ChatGoogleGenerativeAI(
     model="gemini-3.6-flash",
     temperature=0.2,
