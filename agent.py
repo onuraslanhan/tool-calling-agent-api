@@ -17,7 +17,7 @@ load_dotenv(dotenv_path=env_path)
 
 app = FastAPI(title="Agent API")
 
-embeddings = GoogleGenerativeAIEmbeddings(model="embedding-001", max_retries=3)
+embeddings = GoogleGenerativeAIEmbeddings(model="embedding-001")
 llm = ChatGoogleGenerativeAI(
     model="gemini-3.6-flash",
     temperature=0.2,
