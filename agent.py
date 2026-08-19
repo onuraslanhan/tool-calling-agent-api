@@ -11,13 +11,14 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 import trafilatura
 from langchain.agents import create_agent
+from langgraph.checkpoint.memory import MemorySaver
 
 env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 app = FastAPI(title="Agent API")
 
-embeddings = GoogleGenerativeAIEmbeddings(model="embedding-001")
+embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
 llm = ChatGoogleGenerativeAI(
     model="gemini-3.6-flash",
     temperature=0.2,
@@ -134,13 +135,15 @@ system_prompt = (
     "Use calculator only for numeric computations, not for looking up facts."
 )
 
-agent_executor = create_agent(llm, tools, system_prompt=system_prompt)
+checkpointer = MemorySaver()
+agent_executor = create_agent(llm, tools, system_prompt=system_prompt, checkpointer=checkpointer)
 
 @app.post("/ask-agent/")
-async def ask_agent(question: str = Form(...)):
-    result = agent_executor.invoke({"messages": [("user", question)]})
+async def ask_agent(question: str = Form(...), session_id: str = Form(default="default")):
+    config = {"configurable": {"thread_id": session_id}}
+    result = agent_executor.invoke({"messages": [("user", question)]}, config=config)
     final_message = result["messages"][-1]
     return {
         "question": question,
         "answer": final_message.content
-    }
+    }   
