@@ -1,55 +1,41 @@
 # Tool-Calling Agent API
 
-A FastAPI-based agent system built on top of a RAG pipeline — the LLM decides for itself which tools to call (document search, calculation) and in what order, instead of following a fixed hard-coded sequence. Built with LangChain's agent framework, ChromaDB, HuggingFace embeddings, and Google's Gemini model.
+A FastAPI-based agent that decides for itself which tool to use for each question — search uploaded documents, run a calculation, chain both together, or answer directly — instead of following a fixed hard-coded pipeline. Built with LangChain, ChromaDB, and Google Gemini. Follow-up to my [Multi-Source RAG API](https://github.com/onuraslanhan/rag-pdf-qa-api).
 
-This is a follow-up to my [Multi-Source RAG API](../rag-pdf-qa-api) project — same document ingestion pipeline (PDF/DOCX/URL), but the retrieval step is now exposed as a **tool** the LLM chooses to call, rather than always running.
+**Live API:** [tool-calling-agent-api.onrender.com/docs](https://tool-calling-agent-api.onrender.com/docs) — interactive Swagger UI, test every endpoint from the browser.
 
 ## What it does
 
-- Ingests PDF, DOCX, and web content into a persistent ChromaDB vector store (identical pipeline to the RAG project)
-- Exposes two tools to the LLM: `search_documents` (retrieval with the max-relative relevance threshold from the RAG project) and `calculator` (safe expression evaluation)
-- The agent decides, per question, whether it needs to call one tool, both tools in sequence, or no tool at all — the model plans this itself, it isn't hard-coded
+- Ingests PDF, DOCX, and web content into a persistent ChromaDB vector store
+- Exposes two tools to the LLM: `search_documents` (retrieval with a relevance threshold) and `calculator` (safe expression evaluation)
+- The agent decides, per question, whether it needs one tool, both in sequence, or none — the model plans this itself
 
 ## Architecture
 
 ```
-Question
-    → Agent (LLM + tool list)
-    → Model decides: does this need a tool?
-        → search_documents(query) if the answer requires uploaded document content
-        → calculator(expression) if the answer requires a numeric computation
-        → both, in sequence, if the question requires chaining (e.g. find a number in a document, then compute with it)
-        → neither, if the model can answer directly
-    → Final answer
+Question → Agent (LLM + tool list) → model decides:
+    search_documents(query)   — if the answer needs document content
+    calculator(expression)    — if the answer needs a computation
+    both, chained             — e.g. find a number in a document, then compute with it
+    neither                   — if no tool applies
+→ Final answer
 ```
 
-## Why an agent instead of a fixed pipeline
+## Why an agent instead of a fixed RAG pipeline
 
-In the RAG project, retrieval always ran — every question triggered a search, whether or not the question actually needed document content. That's fine for a single-purpose Q&A tool, but it doesn't scale to mixed workloads: a system that also needs to do calculations, or answer general questions, shouldn't force every query through the same fixed steps.
+In the RAG project, retrieval always ran — every question triggered a search, whether or not it needed document content. That doesn't scale to mixed workloads (calculations, general questions, document lookups all in the same system). `create_agent(llm, tools)` gives the model a list of tools with natural-language descriptions and lets it plan its own sequence of calls, including chaining one tool's output into another tool's input.
 
-`create_agent(llm, tools)` gives the model a list of tools with natural-language descriptions (the tool's docstring) and lets it plan its own sequence of calls based on the question — including chaining a tool's output into another tool's input.
+## Tool chaining (tested)
 
-## Tool-chaining example (tested)
+**Question:** *"Find the year Python was first released according to the documents, then calculate how many years have passed since then if the current year is 2026. Also tell me what that result multiplied by 12 equals."*
 
-**Question:** *"Find the year Python was first released according to the documents, then calculate how many years have passed since then if the current year is 2026. Also tell me what 2026 minus that year multiplied by 12 equals."*
-
-**What happened:** the agent called `search_documents` to find the release year (1991, from an uploaded Wikipedia page), then called `calculator` with `2026 - 1991`, then called `calculator` again with the result `* 12` — chaining the output of one tool into the input of the next, without that sequence being hard-coded anywhere in the code.
-
-**Answer:** *"Python was first released in 1991. Years passed (by 2026): 2026 − 1991 = 35 years. Number of months: 35 × 12 = 420 months."* — correct on both retrieval and arithmetic.
-
-## Test results
-
-| # | Question | Expected behavior | Result |
-|---|---|---|---|
-| 1 | Find the release year from documents, then compute years-passed and months-passed | Chain: search → calculate → calculate | Correct chain, correct answer (1991 → 35 years → 420 months) |
-| 2 | What is 847 divided by 7? | Use calculator only, no document search needed | Correct (121), no unnecessary document search |
-| 3 | What's the weather like today? | Neither tool applies — answer directly or state the limitation | Answered directly: no real-time weather access, suggested a weather site |
+**What happened:** `search_documents` → found **1991** in an uploaded Wikipedia page → `calculator("2026 - 1991")` → **35** → `calculator("35 * 12")` → **420**. Three tool calls, correctly chained, with no hard-coded sequence in the code — the model decided the plan.
 
 ## A real limitation found during testing (and fixed)
 
-Initially, the agent wasn't restricted to document content only. Testing with a question unrelated to any uploaded document ("How many Ballon d'Or does Messi have?") showed the agent answering correctly — but from Gemini's own training data, not from `search_documents`. Unlike the RAG project (which explicitly refuses to answer when the relevance threshold isn't met), the agent had no instruction telling it *not* to fall back on general knowledge.
+Initially, the agent could fall back on Gemini's own training data for questions unrelated to any uploaded document (e.g. correctly answering "How many Ballon d'Or does Messi have?" despite no document containing that information). This defeats the purpose of a document-grounded system.
 
-**Fix:** added an explicit system prompt instructing the agent to answer only from tool results and to state that information isn't available in the documents rather than use its own knowledge, even when it "knows" the answer:
+**Fix:** an explicit system prompt restricting the agent to tool results only:
 
 ```python
 system_prompt = (
@@ -63,14 +49,81 @@ system_prompt = (
 agent_executor = create_agent(llm, tools, system_prompt=system_prompt)
 ```
 
-Re-tested with the same Messi question after the fix — the agent correctly responded that the information isn't available in the uploaded documents, instead of answering from its own knowledge.
+Re-tested afterward — the agent correctly refused to answer from its own knowledge and stated the information wasn't in the documents.
+
+## Test results
+
+| # | Question | Expected behavior | Result |
+|---|---|---|---|
+| 1 | Find Python's release year in the documents, compute years and months since | `search_documents` → `calculator` → `calculator` | Correct chain: 1991 → 35 years → 420 months |
+| 2 | What is 847 divided by 7? | `calculator` only, no document search | Correct (121), no unnecessary search |
+| 3 | What is 84756392 × 193857? | `calculator` — LLM shouldn't estimate large products itself | Correct exact result (16,430,619,883,944) |
+| 4 | What's the weather like today? | No tool applies — answer directly, state the limitation | Answered directly, no tool called |
+| 5 | How many Ballon d'Or does Messi have? (before system prompt fix) | Should refuse — no document contains this | Incorrectly answered from general knowledge |
+| 6 | Same question (after system prompt fix) | Should refuse | Correctly stated the information isn't in the uploaded documents |
+
+## Deployment
+
+The API is containerized with Docker and deployed on [Render](https://render.com).
+
+```dockerfile
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+CMD ["uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "10000"]
+```
+
+Running it locally with Docker:
+
+```bash
+docker build -t agent-api .
+docker run -p 8000:10000 --env-file .env agent-api
+```
+
+The container needs a `GOOGLE_API_KEY` environment variable at runtime — passed via `.env` locally, and via Render's environment variable settings in production. This keeps the deployed environment identical to local development, so "works on my machine" isn't a concern.
+
+## Running locally without Docker
+
+```bash
+git clone https://github.com/onuraslanhan/tool-calling-agent-api.git
+cd tool-calling-agent-api
+python -m venv venv
+venv\Scripts\activate      # Windows
+pip install -r requirements.txt
+```
+
+Create a `.env` file:
+```
+GOOGLE_API_KEY=your_google_api_key
+```
+
+```bash
+uvicorn agent:app --reload
+```
+Swagger UI at `http://127.0.0.1:8000/docs`.
+
+## API endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /upload-pdf/` | Upload and index a PDF |
+| `POST /upload-docx/` | Upload and index a DOCX file |
+| `POST /upload-url/` | Fetch and index a web page (via `trafilatura`, with `WebBaseLoader` fallback) |
+| `POST /ask-agent/` | Ask a question — the agent decides which tool(s) to use |
 
 ## Known gaps / next steps
-- No automated logging/tracing of which tools were called per request in the API response itself — currently only visible via `verbose=True` server-side logs, not returned to the client. A production version would return the tool-call trace alongside the answer.
-- `calculator` uses Python's `eval()` with `__builtins__` disabled as a safety measure — fine for a small personal project, but a production tool would use a proper expression-parsing library instead of `eval` in any form.
-- Only two tools currently (search + calculator). The same pattern extends to more tools (e.g. a web search tool, a date/time tool) without changing the agent-setup code.
-- Inherits the same relevance-threshold approach (and its known limitation — score instability as the document collection grows) from the RAG project's `search_documents` logic.
+
+- The API response doesn't return which tools were called — only visible in server logs (`verbose=True`). A future version would include a `tools_used` field in the response.
+- `calculator` uses Python's `eval()` with `__builtins__` disabled for safety. Sufficient for this project's scope, but a production version should use a dedicated expression parser instead of `eval` in any form.
+- Only two tools currently. The pattern extends to more (web search, date/time, etc.) without redesigning the agent setup.
+- Inherits the RAG project's relevance-threshold approach and its known instability as the document collection grows in size and topic diversity.
 
 ## Stack
 
-FastAPI · LangChain (`create_agent`) · ChromaDB · HuggingFace Embeddings (`all-MiniLM-L6-v2`) · Google Gemini · `trafilatura` · `python-docx2txt`
+FastAPI · LangChain (`create_agent`) · ChromaDB · Google Generative AI Embeddings · Google Gemini · `trafilatura` · `python-docx2txt` · Docker · Render
