@@ -108,6 +108,13 @@ uvicorn agent:app --reload
 ```
 Swagger UI at `http://127.0.0.1:8000/docs`.
 
+markdown
+## Session memory (tested)
+Each request takes a `session_id`. Two requests with the same `session_id` share conversation history via a LangGraph `MemorySaver` checkpointer:
+1. "What's the highest year mentioned in the document?" → answer includes a year
+2. "Multiply that by 5" (same `session_id`) → correctly resolves "that" to the year from the previous answer
+Different `session_id` → no shared context, as expected.
+
 ## API endpoints
 
 | Endpoint | Purpose |
@@ -115,7 +122,7 @@ Swagger UI at `http://127.0.0.1:8000/docs`.
 | `POST /upload-pdf/` | Upload and index a PDF |
 | `POST /upload-docx/` | Upload and index a DOCX file |
 | `POST /upload-url/` | Fetch and index a web page (via `trafilatura`, with `WebBaseLoader` fallback) |
-| `POST /ask-agent/` | Ask a question — the agent decides which tool(s) to use |
+| `POST /ask-agent/` | Ask a question with a `session_id` — the agent decides which tool(s) to use and remembers prior turns in that session |
 
 ## Known gaps / next steps
 
@@ -123,7 +130,8 @@ Swagger UI at `http://127.0.0.1:8000/docs`.
 - `calculator` uses Python's `eval()` with `__builtins__` disabled for safety. Sufficient for this project's scope, but a production version should use a dedicated expression parser instead of `eval` in any form.
 - Only two tools currently. The pattern extends to more (web search, date/time, etc.) without redesigning the agent setup.
 - Inherits the RAG project's relevance-threshold approach and its known instability as the document collection grows in size and topic diversity.
+- `gemini-embedding-001` free tier has a 100 requests/minute quota; large document uploads (e.g. long Wikipedia pages) can exceed it. Fixed by batching `add_documents` calls with retry/backoff and increasing chunk size.
 
 ## Stack
 
-FastAPI · LangChain (`create_agent`) · ChromaDB · Google Generative AI Embeddings · Google Gemini · `trafilatura` · `python-docx2txt` · Docker · Render
+FastAPI · LangChain (`create_agent`) · LangGraph (checkpointer) . ChromaDB · Google Generative AI Embeddings · Google Gemini · `trafilatura` · `python-docx2txt` · Docker · Render
