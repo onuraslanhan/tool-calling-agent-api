@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
@@ -44,7 +45,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
         splits = text_splitter.split_documents(docs)
         store = get_or_create_vector_store()
-        store.add_documents(splits)
+        add_documents_with_rate_limit(store, splits)
         return {"message": f"'{file.filename}' processed and indexed successfully!"}
     finally:
         if os.path.exists(file_path):
@@ -61,7 +62,7 @@ async def upload_docx(file: UploadFile = File(...)):
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
         splits = text_splitter.split_documents(docs)
         store = get_or_create_vector_store()
-        store.add_documents(splits)
+        add_documents_with_rate_limit(store, splits)
         return {"message": f"'{file.filename}' processed and indexed successfully!"}
     finally:
         if os.path.exists(file_path):
@@ -84,10 +85,10 @@ def load_url_clean(url: str) -> list[Document]:
 @app.post("/upload-url/")
 async def upload_url(url: str = Form(...)):
     docs = load_url_clean(url)
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
     splits = text_splitter.split_documents(docs)
     store = get_or_create_vector_store()
-    store.add_documents(splits)
+    add_documents_with_rate_limit(store, splits)
     return {"message": f"'{url}' processed and indexed successfully!"}
 
 @tool
@@ -124,6 +125,21 @@ def calculator(expression: str) -> str:
         return str(result)
     except Exception as e:
         return f"Error evaluating expression: {e}"
+
+def add_documents_with_rate_limit(store, splits, batch_size=20, delay=15):
+    for i in range(0, len(splits), batch_size):
+        batch = splits[i:i + batch_size]
+        for attempt in range(3):
+            try:
+                store.add_documents(batch)
+                break
+            except Exception as e:
+                if "RESOURCE_EXHAUSTED" in str(e) or "429" in str(e):
+                    time.sleep(delay)
+                else:
+                    raise
+        if i + batch_size < len(splits):
+            time.sleep(2)
 
 tools = [search_documents, calculator]
 system_prompt = (
