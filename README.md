@@ -127,6 +127,7 @@ Different `session_id` → no shared context, as expected.
 ## Known gaps / next steps
 
 - The API response doesn't return which tools were called — only visible in server logs (`verbose=True`). A future version would include a `tools_used` field in the response.
+- `calculator` previously used Python's `eval()`. Replaced with an AST-based safe evaluator that only permits whitelisted arithmetic operators and functions from Python's `math` module — arbitrary code execution is no longer possible.
 - Only two tools currently. The pattern extends to more (web search, date/time, etc.) without redesigning the agent setup.
 - Inherits the RAG project's relevance-threshold approach and its known instability as the document collection grows in size and topic diversity.
 - `gemini-embedding-001` free tier has a 100 requests/minute quota; large document uploads (e.g. long Wikipedia pages) can exceed it. Fixed by batching `add_documents` calls with retry/backoff and increasing chunk size.
