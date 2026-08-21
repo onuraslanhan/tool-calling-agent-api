@@ -1,5 +1,8 @@
+import ast
 import os
 import time
+import operator
+import math
 from pathlib import Path
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
@@ -117,11 +120,48 @@ def search_documents(query: str) -> str:
     )
     return context
 
+_ALLOWED_OPERATORS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+    ast.USub: operator.neg,
+}
+
+_ALLOWED_FUNCTIONS = {
+    name: getattr(math, name)
+    for name in dir(math)
+    if not name.startswith("_") and callable(getattr(math, name))
+}
+_ALLOWED_FUNCTIONS["abs"] = abs
+_ALLOWED_FUNCTIONS["round"] = round
+
+def safe_eval(expression: str):
+    def _eval(node):
+        if isinstance(node, ast.Constant):
+            return node.value
+        elif isinstance(node, ast.BinOp):
+            return _ALLOWED_OPERATORS[type(node.op)](_eval(node.left), _eval(node.right))
+        elif isinstance(node, ast.UnaryOp):
+            return _ALLOWED_OPERATORS[type(node.op)](_eval(node.operand))
+        elif isinstance(node, ast.Call):
+            func_name = node.func.id
+            if func_name not in _ALLOWED_FUNCTIONS:
+                raise ValueError(f"Function not allowed: {func_name}")
+            args = [_eval(arg) for arg in node.args]
+            return _ALLOWED_FUNCTIONS[func_name](*args)
+        else:
+            raise ValueError(f"Unsupported expression: {node}")
+    
+    tree = ast.parse(expression, mode="eval")
+    return _eval(tree.body)
+
 @tool
 def calculator(expression: str) -> str:
-    """Evaluate a simple mathematical expression, e.g. '15 * 3' or '100 / 4'. Use this whenever the question requires a numeric calculation."""
+    """Evaluate a mathematical expression. Supports +, -, *, /, ** (power) and any function from Python's math module (log, sqrt, sin, sinh, factorial, etc). Example: 'log(100, 10)', 'sinh(1)', 'sqrt(144)', '2**10'."""
     try:
-        result = eval(expression, {"__builtins__": {}}, {})
+        result = safe_eval(expression)
         return str(result)
     except Exception as e:
         return f"Error evaluating expression: {e}"
