@@ -159,7 +159,16 @@ async def ask_agent(question: str = Form(...), session_id: str = Form(default="d
     config = {"configurable": {"thread_id": session_id}}
     result = agent_executor.invoke({"messages": [("user", question)]}, config=config)
     final_message = result["messages"][-1]
+    
+    content = final_message.content
+    if isinstance(content, list):
+        answer_text = "".join(
+            block.get("text", "") for block in content if isinstance(block, dict) and block.get("type") == "text"
+        )
+    else:
+        answer_text = content
+    
     return {
         "question": question,
-        "answer": final_message.content
+        "answer": answer_text
     }   
